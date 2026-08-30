@@ -155,7 +155,7 @@ and `READY`, the match begins and you'll get a menu each turn.
 You can also pass everything as arguments for a quick non-interactive
 test:
 ```bash
-python3 client.py 127.0.0.1 5050 Nont WARRIOR LIGHT
+python3 client.py 127.0.0.1 5050 Noctis WARRIOR LIGHT
 python3 client.py 127.0.0.1 5050 Belle MAGE
 ```
 
@@ -165,17 +165,6 @@ directly for the demo video.
 
 ---
 
-## 5. File Structure
-
-```
-duel-project/
-├── protocol.py     # DUEL/1.0 wire format: encode/decode, status codes (this is the protocol spec)
-├── game_engine.py  # Character classes, status effects, combat resolution (network-independent)
-├── server.py       # TCP server: lobby handshake + turn-based referee loop
-├── client.py       # TCP client: interactive menu, prints all protocol traffic
-└── README.md       # This file — also the Part 1 protocol write-up
-```
-
-## 6. Presentation Clip
+## 5. Presentation Clip
 
 [![Presentation Video Clip](https://drive.google.com/file/d/1Kw8eAw9oJuNA2B8x5r649ZOiLfI6S2fD/view?usp=sharing)](https://drive.google.com/file/d/1Kw8eAw9oJuNA2B8x5r649ZOiLfI6S2fD/view?usp=sharing)
