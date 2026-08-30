@@ -31,6 +31,15 @@ STATUS_DURATIONS = {
 
 DOT_STATUSES = {"BURNING", "BLEEDING", "POISON"}  # damage-over-time, 1 heart/turn
 
+# "Hard stuns" - statuses that fully prevent the target from acting on
+# their turn. Reapplying the SAME hard stun while it's already active
+# breaks it instead of refreshing the duration (see _try_apply_status),
+# which prevents infinite stun-lock loops.
+STUN_STATUSES = {"SHOCKING", "FREEZING"}
+STUN_BREAK_BONUS_DAMAGE = 1  # bonus damage dealt when a repeat-stun backfires
+
+BLOCK_MANA_REGEN = 1  # every class regains this much mana when they choose BLOCK
+
 
 class StatusEffect:
     def __init__(self, name, turns_left=None):
@@ -234,13 +243,19 @@ def resolve_action(actor: Character, target: Character, verb, args, log):
     result = {"code": 202, "damage": 0, "status_applied": [], "note": ""}
 
     # --- BLOCK (any class) ------------------------------------------
+    # Blocking has two effects for every class: it reduces/negates the next
+    # incoming hit (handled in _apply_damage_with_defenses), AND it restores
+    # 1 mana, per the original game design ("blocking... restores mana on
+    # that turn"). The player can't do anything else this turn.
     if verb == "BLOCK":
-        target_will_take_less = True
         result["note"] = f"{actor.owner_name} braces to block."
         actor.apply_status("_BLOCKING", turns=1)
-        if isinstance(actor, (WarriorLight,)):
-            actor.mana = min(actor.max_mana, actor.mana + 2)
+        mana_before = actor.mana
+        actor.mana = min(actor.max_mana, actor.mana + BLOCK_MANA_REGEN)
+        gained = actor.mana - mana_before
         log.append(f"{actor.owner_name} chooses to BLOCK this turn.")
+        if gained:
+            log.append(f"{actor.owner_name} regenerates {gained} mana from blocking (mana: {actor.mana}/{actor.max_mana})")
         return result
 
     # --- WARRIOR actions ----------------------------------------------
@@ -265,8 +280,10 @@ def resolve_action(actor: Character, target: Character, verb, args, log):
                 [atk["status"]] if atk["status"] else []
             )
             for s in statuses:
-                _try_apply_status(target, s, log)
-                result["status_applied"].append(s)
+                bonus, applied = _try_apply_status(target, s, log)
+                result["damage"] += bonus
+                if applied:
+                    result["status_applied"].append(s)
             log.append(f"{actor.owner_name} used {mode} attack on {target.owner_name} for {dmg} damage.")
             return result
 
@@ -286,8 +303,10 @@ def resolve_action(actor: Character, target: Character, verb, args, log):
             dmg = _apply_damage_with_defenses(actor, target, spell["damage"], log)
             result["damage"] = dmg
             if spell["status"]:
-                _try_apply_status(target, spell["status"], log)
-                result["status_applied"].append(spell["status"])
+                bonus, applied = _try_apply_status(target, spell["status"], log)
+                result["damage"] += bonus
+                if applied:
+                    result["status_applied"].append(spell["status"])
             log.append(f"{actor.owner_name} cast {spell_name} on {target.owner_name} for {dmg} damage.")
             return result
 
@@ -343,8 +362,10 @@ def resolve_action(actor: Character, target: Character, verb, args, log):
             dmg = _apply_damage_with_defenses(actor, target, dmg_base, log)
             result["damage"] = dmg
             if atk["status"]:
-                _try_apply_status(target, atk["status"], log)
-                result["status_applied"].append(atk["status"])
+                bonus, applied = _try_apply_status(target, atk["status"], log)
+                result["damage"] += bonus
+                if applied:
+                    result["status_applied"].append(atk["status"])
             note = f"{actor.owner_name} used {mode} attack on {target.owner_name} for {dmg} damage."
             if is_crit:
                 note += " CRITICAL HIT!"
@@ -370,17 +391,38 @@ def resolve_action(actor: Character, target: Character, verb, args, log):
 def _try_apply_status(target: Character, status_name, log):
     """Applies a status honoring resistances and interaction rules
     (e.g. WarriorHeavy's 50% resist chance, freezing-breaks-on-hit,
-    bleeding -> severe bleeding escalation)."""
+    bleeding -> severe bleeding escalation, stun-lock prevention).
+
+    Returns (bonus_damage, applied):
+      - bonus_damage: extra damage dealt as a side effect (e.g. a repeat
+        stun backfiring). Callers should add this to their reported damage.
+      - applied: whether the status actually ended up active on the
+        target (False if resisted, broken, or backfired) — callers should
+        only report the status as applied when this is True.
+    """
     if status_name is None:
-        return
+        return 0, False
 
     # Heavy warrior stability: 50% resist to dazed/shocking/freezing/burning
     if isinstance(target, WarriorHeavy) and status_name in ("DAZED", "SHOCKING", "FREEZING", "BURNING"):
         if random.random() < target.stable_resist_chance:
             log.append(f"{target.owner_name}'s Heavy Warrior stability RESISTS {status_name}!")
-            return
+            return 0, False
 
-    # Freezing breaks instantly when the frozen target is hit again
+    # Anti stun-lock rule: reapplying the SAME hard stun (Shocking/Freezing)
+    # while it's already active breaks it instead of refreshing the
+    # duration, and deals bonus damage. This is what stops a caster from
+    # spamming one stun spell to lock a target out of the game forever.
+    if status_name in STUN_STATUSES and target.has_status(status_name):
+        target.remove_status(status_name)
+        bonus = target.take_damage(STUN_BREAK_BONUS_DAMAGE, log)
+        log.append(
+            f"{target.owner_name}'s {status_name} destabilizes from the repeat hit! "
+            f"Stun broken, {bonus} bonus damage dealt."
+        )
+        return bonus, False
+
+    # Freezing breaks instantly when the frozen target is hit by anything else
     if status_name != "FREEZING" and target.has_status("FREEZING"):
         target.remove_status("FREEZING")
         log.append(f"{target.owner_name}'s FREEZING shatters from the hit!")
@@ -390,10 +432,11 @@ def _try_apply_status(target: Character, status_name, log):
         target.remove_status("BLEEDING")
         target.bleeding_turns_survived = 0
         log.append(f"{target.owner_name}'s bleeding escalates to SEVERE BLEEDING!")
-        return  # caller should separately deal severe bleeding burst damage if desired
+        return 0, False  # caller should separately deal severe bleeding burst damage if desired
 
     target.apply_status(status_name)
     log.append(f"{target.owner_name} is now afflicted with {status_name}")
+    return 0, True
 
 
 def _apply_damage_with_defenses(actor, target, base_damage, log):

@@ -14,7 +14,7 @@ REQUEST FORMAT (Client -> Server)
     VERB arg1 arg2 ... argN\r\n
 
 Examples:
-    HELLO Nont
+    HELLO Chino
     CHOOSE WARRIOR LIGHT
     READY
     ACTION NORMAL
@@ -36,7 +36,7 @@ RESPONSE FORMAT (Server -> Client)
 
 Example:
     DUEL/1.0 202 TURN_RESOLVED
-    Actor: Nont
+    Actor: Chino
     Action: HEAVY
     Damage: 4
     Target: Belle
